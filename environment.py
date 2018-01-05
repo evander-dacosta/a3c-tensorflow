@@ -13,7 +13,8 @@ class Environment(object):
     def __init__(self, config):
         self.env = gym.make(config.env_name)
         
-        self.random_start, self.display = config.random_start, config.display
+        self.random_start_steps, self.display = \
+              config.random_start_steps, config.display
         
         self._state = None
         self.reward = 0
@@ -37,18 +38,18 @@ class Environment(object):
         starting at terminal positions. If this is the case,
         reduce 'config.random_start'
         """
-        self.new_game()
-        for _ in range(np.random.randint(0, self.random_start - 1)):
+        self.reset()
+        for _ in range(np.random.randint(0, self.random_start_steps - 1)):
             self.step(self.random_step())
         self.render()
-        return self.screen, 0, 0, self.terminal
+        return self.state, 0, 0, self.terminal
     
     def step(self, action):
         self._state, self.reward, self.terminal, _ = self.env.step(action)
         
     def random_step(self):
         action = self.env.action_space.sample()
-        self.step(action)
+        return action
         
     @property
     def state(self):
