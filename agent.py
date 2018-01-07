@@ -25,7 +25,7 @@ class BaseAgent(mp.Process):
         self.n_actions = self.env.action_size
         self.actions = np.arange(self.n_actions)
         
-        self.discount, self.max_steps = config.discount, config.max_steps
+        self.discount, self.max_steps = config.h_discount, config.h_max_steps
         # One frame at a time
         self.wait_q = mp.Queue(maxsize=1)
         
