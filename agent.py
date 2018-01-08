@@ -74,3 +74,4 @@ class BaseAgent(mp.Process):
             for experience in self.run_episode():
                 print(experience.state, experience.reward)
                 self.training_q.put(experience)
+                

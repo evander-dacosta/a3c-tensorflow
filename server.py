@@ -17,7 +17,7 @@ class Server:
         self.agents = []
         
         self.is_alive = True
-        self.build()
+        self.start()
 
         
     def build(self):
@@ -38,5 +38,11 @@ class Server:
     def save_model(self):
         pass
     
+    def stop(self):
+        pass
+    
     def start(self):
+        pass
+    
+    def simulate(self):
         pass
