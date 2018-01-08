@@ -39,7 +39,10 @@ class Environment(object):
         reduce 'config.random_start'
         """
         self.reset()
-        for _ in range(np.random.randint(0, self.random_start_steps - 1)):
+        if(self.random_start_steps == 0):
+            return self.state, 0, 0, self.terminal
+
+        for _ in range(np.random.randint(0, self.random_start_steps)):
             self.step(self.random_step())
         self.render()
         return self.state, 0, 0, self.terminal

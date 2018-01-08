@@ -9,6 +9,7 @@ Created on Fri Jan  5 16:24:39 2018
 
 import tensorflow as tf
 import os
+import gym
 from utils import class_vars
     
 
@@ -36,6 +37,11 @@ class BaseModel(object):
             name = attr if not attr.startswith('_') else attr[1:]
             setattr(self, name, getattr(self.config, attr))
             
+        # Models have a local copy of an environment, but NEVER! use it
+        self._env = gym.make(config.env_name)
+        self._example_state = None
+        self.build()
+            
         
     def save_model(self, step=None):
         print("[*] Saving a checkpoint")
@@ -57,6 +63,16 @@ class BaseModel(object):
             return False
         
     @property
+    def action_size(self):
+        return self._env.action_space.n
+    
+    @property
+    def state_shape(self):
+        if(self._example_state is None):
+            self._example_state = self._env.reset()
+        return len(self._example_state)
+        
+    @property
     def checkpoint_dir(self):
         return os.path.join('checkpoints', self.model_dir)
     
@@ -74,3 +90,6 @@ class BaseModel(object):
         if(self._saver == None):
             self._saver = tf.train.Saver(max_to_keep=10)
         return self._saver
+    
+    def build(self):
+        raise NotImplementedError()

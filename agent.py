@@ -29,6 +29,9 @@ class BaseAgent(mp.Process):
         # One frame at a time
         self.wait_q = mp.Queue(maxsize=1)
         
+        # exit flag
+        self.exit_flag = mp.Value('i', 0)
+        
         
     def predict(self, state):
         self.prediction_q.put((self.id, state))
@@ -67,6 +70,7 @@ class BaseAgent(mp.Process):
         
         # Put this in a while loop that checks a shared variable
         # Will keep running episodes until the shared variable reports False
-        for experience in self.run_episode():
-            print(experience.state, experience.reward)
-            self.training_q.put(experience)
+        while(self.exit_flag.value == 0):
+            for experience in self.run_episode():
+                print(experience.state, experience.reward)
+                self.training_q.put(experience)
