@@ -10,6 +10,7 @@ import gym
 import tensorflow as tf
 import numpy as np
 import multiprocessing as mp
+from threading import Thread
 import time
 
 from environment import SimpleEnvironment
@@ -22,13 +23,75 @@ class Config:
     display =  True
     random_start_steps = 30
     
-    h_discount = 0.9
-    h_max_steps = 10000
-    h_max_q_size = 10000
+    discount = 0.9
+    max_steps = 10000
+    max_q_size = 10000
+    
+    #training hyperparams
+    batch_size = 1
     
     def create_agent(self):
         pass
     
+    
+class Trainer(Thread):
+    """
+    Base class for Trainer objects 
+
+    What a trainer does:
+        1) Collects experience data from an external experience store.
+        2) Puts experiences into minibatches
+        3) Sends minibatches off to the model to .fit()
+        4) Returns the appropriate statistics and logs (? should this be handled by the model?)
+    
+    The trainer object is a thread daemon. There should only one of its kind
+    running. This is an implementation detail which will be handled by the
+    server class.
+    """
+    def __init__(self, server):
+        super(Trainer, self).__init__()
+        self.setDaemon(True)
+    
+        self.server = server
+        self.config = self.server.config
+        
+        self.exit_flag = False
+        
+    def run(self):
+        raise NotImplementedError()
+        
+        
+class Predictor(Thread):
+    """
+    Base class for predictor objects.
+    
+    What a predictor does:
+        1) Collects states from a state store.
+        2) Puts it into minibatches
+        3) Sends it off to the model to .predict()
+        4) Returns the predictions into the wait_q of the appropriate agent
+    
+    The predictor thread is a thread daemon. There should only one of its kind
+    running. This is an implementation detail which will be handled by the
+    server class.
+    """
+    def __init__(self, server):
+        super(Trainer, self).__init__()
+        self.setDaemon(True)
+    
+        self.server = server
+        self.config = self.server.config
+        
+        self.exit_flag = False
+    
+    def run(self):
+        raise NotImplementedError()
+        
+        
+
+
+        
+
     
 class Model(BaseModel):
     def __init__(self, config, sess):
@@ -39,32 +102,33 @@ class Model(BaseModel):
         pass
         
     def build(self):
-        with tf.variable_scope('model'):
-            self.target = tf.placeholder(dtype=tf.float32, shape=(None, 2),
-                                         name='target')
-            self.input = tf.placeholder(dtype=tf.float32, shape=(None, 2),
-                                        name='input')
-            self.hidden, self.w['hidden_w'], self.w['hidden_b'] = \
-                Dense(self.input, output_shape=32, activation_fn='tanh',
-                      name='hidden')
-            self.output, self.w['output_w'], self.w['output_b'] = \
-                Dense(self.hidden, output_shape=2, activation_fn='linear',
-                      name='output')
-                
-        with tf.variable_scope('optimiser'):
-            self.optimiser = tf.train.AdamOptimizer()
-            self.loss = tf.reduce_mean(self.cost_fn(self.output, self.target))
-            self.min_op = self.optimiser.minimize(self.loss)
+        self.parameters = np.random.rand(4) * 2 - 1
+        self.noise_scaling = 0.1
             
     
     def fit(self, x, y):
-        pass
+        new_params = self.parameters + (np.random.rand(4) * 2 - 1) * \
+                                                self.noise_scaling
+        return new_params
     
     def predict(self, x):
-        pass
+        action = 0 if np.matmul(self.parameters, x) < 0 else 1
+        return action
     
     def cost_fn(self, output, target):
         pass
+    
+    
+class HillClimbAgent(BaseAgent):
+    def predict(self, state):
+        self.prediction_q.put((self.id, state))
+        #wait for prediction to come back
+        a, v = self.wait_q.get()
+        v = self.env.reward
+        return a, v
+    
+    
+
     
 class Server:
     def __init__(self, config):

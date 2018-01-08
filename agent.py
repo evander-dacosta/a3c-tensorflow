@@ -25,7 +25,7 @@ class BaseAgent(mp.Process):
         self.n_actions = self.env.action_size
         self.actions = np.arange(self.n_actions)
         
-        self.discount, self.max_steps = config.h_discount, config.h_max_steps
+        self.discount, self.max_steps = config.discount, config.max_steps
         # One frame at a time
         self.wait_q = mp.Queue(maxsize=1)
         
@@ -59,6 +59,9 @@ class BaseAgent(mp.Process):
             t += 1
             
     def run(self):
+        """
+        Takes in a game's experience frame-by-frame
+        """
         time.sleep(np.random.rand())
         np.random.seed(np.int32(time.time() % 1000 * self.id))
         
