@@ -19,14 +19,6 @@ class BaseModel(object):
         self.sess = sess
         self._saver = None
         
-        # Keep a graph variable tracking steps
-        # Can use this for annealing, etc
-        with tf.variable_scope('step'):
-            self.step = tf.Variable(0, trainable=False, name='step')
-            self.step_input = tf.placeholder('int32', None, name='step_input')
-            self.step_assign_op = self.step.assign(self.step_input)
-            
-        
         try:
             self._attrs = config.__dict__['__flags']
         except:
@@ -40,7 +32,6 @@ class BaseModel(object):
         # Models have a local copy of an environment, but NEVER! use it
         self._env = gym.make(config.env_name)
         self._example_state = None
-        self.build()
             
         
     def save_model(self, step=None):

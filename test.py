@@ -40,15 +40,16 @@ class Config:
     discount = 0.9
     max_steps = 10000
     max_q_size = 10000
-    memory_size = 1e6
+    memory_size = 10000
     
     #training hyperparams
     batch_size = 32
     predict_batch_size = 1
-    
-    
-    def create_agent(self):
-        pass
+    learning_rate = 0.00025
+    learning_rate_minimum = 0.00025
+    learning_rate_decay = 0.96
+    learning_rate_decay_step = 5000
+
     
     
 
@@ -120,6 +121,11 @@ class ReplayMemory:
 
     
     def sample_batch(self):
+        # Hangs the trainer until we put some more 
+        # experience into the memory
+        while(self.count < self.batch_size):
+            continue
+        
         indices = []
         s = [0] * self.batch_size
         a = [0] * self.batch_size
@@ -190,20 +196,45 @@ class DeepQTrainer(Trainer):
     def run(self):
         while(not self.exit_flag):
             s, a, r, s_, t = self.server.training_q.sample_batch()
-            self.server.model.fit(s, a, r, s_, t)
+            print(self.server.model.fit(s, a, r, s_, t))
 
 
 class DeepQPredictor(Predictor):
     def run(self):
         while(not self.exit_flag):
-            id, state = self.get_prediction()
-            result = self.server.model.predict(state)
-            self.server.agents[id].wait_q.put(result)
+            ids = []
+            batch = []
+            while(len(batch) < self.server.config.predict_batch_size):
+                id, state = self.get_prediction()
+                ids.append(id)
+                batch.append(state)
+                
+            results = self.server.model.predict(np.array(batch))
+            for i, id in enumerate(ids):
+                self.server.agents[id].wait_q.put(results[i])
 
 
 
 
 class DeepQModel(BaseModel):
+    def __init__(self, config, sess):
+        self.screen_height, self.screen_width, self.history_length = \
+            config.screen_height, config.screen_width, config.history_length
+            
+        self.cnn_format = config.cnn_format
+        
+        self.learning_rate, self.learning_rate_minimum, self.learning_rate_decay = \
+            config.learning_rate, config.learning_rate_minimum, config.learning_rate_decay
+            
+        self.learning_rate_decay_step = config.learning_rate_decay_step
+        
+        self.discount = config.discount
+        
+        super(DeepQModel, self).__init__(config, sess)
+        
+        self.step = 0
+        
+
     def build(self):
         self.w = {}
         self.t_w = {}
@@ -238,7 +269,7 @@ class DeepQModel(BaseModel):
             self.l4, self.w['l4_w'], self.w['l4_b'] = linear(self.l3_flat, 
                                     512, activation_fn=activation_fn, name='l4')
             self.q, self.w['q_w'], self.w['q_b'] = linear(self.l4, 
-                                    self.env.action_size, name='q')
+                                    self.action_size, name='q')
             
             self.q_action = tf.argmax(self.q, dimension=1)
             
@@ -272,7 +303,7 @@ class DeepQModel(BaseModel):
                     linear(self.target_l3_flat, 512, 
                            activation_fn=activation_fn, name='target_l4')
             self.target_q, self.t_w['q_w'], self.t_w['q_b'] = \
-                    linear(self.target_l4, self.env.action_size, name='target_q')
+                    linear(self.target_l4, self.action_size, name='target_q')
                     
             self.target_q_idx = tf.placeholder('int32', [None, None], 'outputs_idx')
             self.target_q_with_idx = tf.gather_nd(self.target_q, self.target_q_idx)
@@ -290,7 +321,7 @@ class DeepQModel(BaseModel):
             self.target_q_t = tf.placeholder('float32', [None], name='target_q_t')
             self.action = tf.placeholder('int64', [None], name='action')
             
-            action_one_hot = tf.one_hot(self.action, self.env.action_size, 1., 0., name='action_one_hot')
+            action_one_hot = tf.one_hot(self.action, self.action_size, 1., 0., name='action_one_hot')
             q_acted = tf.reduce_sum(self.q * action_one_hot, reduction_indices=1, name='q_acted')
             
             self.delta = self.target_q_t - q_acted
@@ -303,20 +334,22 @@ class DeepQModel(BaseModel):
                 tf.train.exponential_decay(
                         self.learning_rate,
                         self.learning_rate_step,
+                        self.learning_rate_decay_step,
                         self.learning_rate_decay,
                         staircase=True))
             self.optim = tf.train.RMSPropOptimizer(
                     self.learning_rate_op, momentum=0.95, epsilon=0.01).minimize(self.loss)
             
-        self.sess.run(tf.global_variables_initialiser())
-        self._saver = tf.train.Saver(self.w.values() + [self.step_op], max_to_keep=30)
+        self.sess.run(tf.global_variables_initializer())
+        #self._saver = tf.train.Saver(self.w.values() + [self.step_op], max_to_keep=30)
         
-        self.load_model()
+        #self.load_model()
         self.update_target_q_network()
                 
     def update_target_q_network(self):
         for name in self.w.keys():
-            self.sess.run(self.t_w_assign_op[name], {self.t_w_input[name]: self.w[name].eval(sess=self.sess)})
+            self.sess.run(self.t_w_assign_op[name], {
+                    self.t_w_input[name]: self.w[name].eval(session=self.sess)})
         
     def fit(self, s_t, action, reward, s_, terminal):
         
@@ -332,11 +365,11 @@ class DeepQModel(BaseModel):
                 self.action: action,
                 self.s_t: s_t,
                 self.learning_rate_step: self.step})
-    
+        self.step += 1
         return loss
         
     def predict(self, x):
-        return self.sess.run(self.target_q, {self.target_s_t: x})
+        return self.sess.run(self.q_action, {self.s_t: x})
         
     def add_summary(self, summary_tags):
         raise NotImplementedError()    
@@ -350,9 +383,9 @@ class DeepQAgent(BaseAgent):
                                          env)
         
     def predict(self, state):
-        #self.prediction_q.put((self.id, state))
+        self.prediction_q.put((self.id, state))
         #wait for prediction to come back
-        a = self.env.random_step()
+        a = self.wait_q.get()
         return a
 
     
@@ -404,17 +437,21 @@ class DeepQServer(Server):
         self.agents = []
         
         self.is_alive = True
-        self.start()
         
     def start(self):
-        self.trainer = DeepQTrainer()
+        tf.reset_default_graph()
+        
+        self.trainer = DeepQTrainer(self)
         self.trainer.start()
         
-        self.predictor = DeepQPredictor()
+        self.predictor = DeepQPredictor(self)
         self.predictor.start()
         
-        self.model = DeepQModel(self.config)
+        self.session = tf.Session()
+        self.model = DeepQModel(self.config, self.session)
         self.model.build()
+        
+        self.add_agent()
         
     def add_agent(self, simulate=False):
         self.agents.append(DeepQAgent(len(self.agents), 
@@ -434,13 +471,8 @@ class DeepQServer(Server):
         
 
 if __name__ == "__main__":
-    replay = ReplayMemory(100, config=Config())
-    pq = Queue(maxsize=10000)
-    agent = DeepQAgent(0, pq, replay, Config())
-    agent.start()
-    time.sleep(2)
-    a = replay.sample_batch()
-    print(a[0].shape)
+    server = DeepQServer(Config())
+    server.start()
     
     
 

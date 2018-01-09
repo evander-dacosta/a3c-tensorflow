@@ -17,7 +17,6 @@ class Server:
         self.agents = []
         
         self.is_alive = True
-        self.start()
         
     def remove_agent(self):
         self.agents[-1].exit_flag.value = True
