@@ -93,3 +93,13 @@ class BaseModel(object):
     
     def build(self):
         raise NotImplementedError()
+        
+        
+    def fit(self, x, y):
+        raise NotImplementedError()
+        
+    def predict(self, x):
+        raise NotImplementedError()
+        
+    def add_summary(self, summary_tags):
+        raise NotImplementedError()
