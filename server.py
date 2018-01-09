@@ -18,31 +18,45 @@ class Server:
         
         self.is_alive = True
         self.start()
-
         
-    def build(self):
-        pass
-    
-    def add_agent(self):
-        pass
-    
     def remove_agent(self):
-        pass
+        self.agents[-1].exit_flag.value = True
+        self.agents[-1].terminate()
+        self.agents.pop()
+        print("Server: Agent stopped")
     
-    def train_model(self):
-        pass
-    
-    def predict_model(self):
-        pass
+    def train_model(self, scores):
+        self.model.fit(scores)
+        
+    def predict_model(self, states):
+        return self.model.predict(states)
     
     def save_model(self):
-        pass
+        self.model.save_model()
     
     def stop(self):
-        pass
+        self.trainer.exit_flag = True
+        self.trainer.join()
+        print("Server: Trainer terminated")
+        
+        self.predictor.exit_flag = True
+        self.predictor.join()
+        print("Server: Predictor terminated")
+        
+        for i in range(len(self.agents)):
+            self.remove_agent()
+        print("Server: Agents terminated")
+        self.is_alive = False
     
     def start(self):
-        pass
+        raise NotImplementedError()
     
-    def simulate(self):
-        pass
+    def add_agent(self, simulate=False):
+        """self.agents.append(HillClimbAgent(len(self.agents), 
+                                          self.prediction_q, self.training_q,
+                                          self.config))
+        if(simulate):
+            self.agents[-1].simulate()
+        else:
+            self.agents[-1].start()"""
+        raise NotImplementedError()

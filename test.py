@@ -9,132 +9,213 @@ Created on Fri Jan  5 13:25:32 2018
 import gym
 import tensorflow as tf
 import numpy as np
-
+import threading
 import time
 
-from environment import SimpleEnvironment
+from environment import SimpleEnvironment, Environment, ALEEnvironment
 from experience import Experience
 from agent import BaseAgent
 from model import BaseModel
 from trainer import Trainer
 from predictor import Predictor 
 from server import Server
+from utils import imresize, rgb2gray
 
 class Config:
-    env_name = 'CartPole-v0'
+    env_name = 'Breakout-v0'
+    screen_height = 84
+    screen_width = 84
+    max_reward = 1.
+    min_reward = -1.
+    cnn_format = 'NHWC'
+    
     display =  False
     random_start_steps = 10
+    action_repeat = 1
+    history_length = 4
     
     discount = 0.9
     max_steps = 10000
     max_q_size = 10000
+    memory_size = 1e6
     
     #training hyperparams
     batch_size = 32
     predict_batch_size = 1
     
+    
     def create_agent(self):
         pass
-        
+    
+    
 
-class HillClimbModel(BaseModel):
-    def __init__(self, config, sess):
-        super(HillClimbModel, self).__init__(config, sess)
+            
+            
+class ReplayMemory:
+    """
+    Provides a Queue-like interface to an experience store
+    """
+    def __init__(self, maxsize):
+        self.maxsize = maxsize
         
-        # Keep track of the best parameters and its score
-        self.best_params = None
-        self.best_params_score = -np.inf
+        self.s = [0] * maxsize
+        self.a = ['.'] * maxsize
+        self.r = ['.'] * maxsize
+        self.s_ = [0] * maxsize
+        self.t = ['.'] * maxsize
         
-    def add_summary(self, tag_dict, step):
-        pass
+        self.count = 0
+        self.put_pointer = 0
         
-    def build(self):
-        self.noise_scaling = 0.1
-                
-        self.parameters = self.generate_params()
-        self.best_params = self.parameters[:]
+        self.lock = threading.Lock()
+    
+    def put(self, experience):
+        self.lock.acquire()
+        s, a, r, s_, t = experience.get()
+        
+        self.s.append(s)
+        self.a.append(a)
+        self.r.append(r)
+        self.s_.append(s_)
+        self.t.append(t)
+        
+        self.count += 1
+        self.put_pointer = (self.put_pointer + 1) % self.maxsize
+        self.lock.release()
+
+    def get(self):
+        """
+        Sample a random experience from the experience store
+        """
+        if(self.count >= self.maxsize):
+            idx = np.random.randint(0, self.maxsize)
+        else:
+            idx = np.random.randint(0, self.put_pointer)
+        return self.idx(idx)
+    
+    def idx(self, idx):
+        self.lock.acquire()
+        s, a, r, s_, t = self.s[idx], self.a[idx], self.r[idx], self.s_[idx],\
+                         self.t[idx]
+        payload = (s, a, r, s_, t)
+        self.lock.release()
+        return payload
+    
+    
+class StateHistory:
+    """
+    Stores the previous sequence of states that happened according
+    to config.history_length.
+    
+    This is a way for the network to see the immediate sequence preceding 
+    the state to leverage sequential information.
+    """
+    def __init__(self, config):
+        self.cnn_format = config.cnn_format
+        
+        history_length, screen_height, screen_width = \
+            config.history_length, config.screen_height, config.screen_width
+            
+        self.history = np.zeros([history_length, screen_height, screen_width],
+                                dtype=np.float32)
+        
+    def add(self, x):
+        self.history[:-1] = self.history[1:]
+        self.history[-1] = x
+        
+    def reset(self):
+        self.history *= 0
+        
+    def get(self):
+        if(self.cnn_format == 'NHWC'):
+            return np.transpose(self.history, (1, 2, 0))
+        else:
+            return self.history
+    
+
+class DeepQTrainer(Trainer):
+    pass
 
 
-    def fit(self, current_scores):
-        print("Model: Current score: {}, Best score: {}".format(current_scores, 
-                                                                  self.best_params_score))
-        if(current_scores > self.best_params_score):
-            self.best_params_score = current_scores
-            self.best_params = self.parameters
-        self.parameters = self.generate_params(self.parameters)
-    
-    def predict(self, x):
-        action = 0 if np.matmul(self.parameters, x) < 0 else 1
-        return action
-    
-    def cost_fn(self, output, target):
-        pass
-    
-    def generate_params(self, params=None):
-        if(params is None):
-            params = np.random.rand(self.state_shape) * 2 - 1
-        return params + (np.random.rand(self.state_shape) * 2 - 1) * \
-                                                            self.noise_scaling
-                                                            
+class DeepQPredictor(Predictor):
+    pass
     
     
-class HillClimbAgent(BaseAgent):
+    
+class DeepQAgent(BaseAgent):
+    def __init__(self, id, prediction_q, training_q, config):
+        self.history = StateHistory(config)
+        env = ALEEnvironment(config)
+        super(DeepQAgent, self).__init__(id, prediction_q, training_q, config,
+                                         env)
+        
     def predict(self, state):
-        self.prediction_q.put((self.id, state))
+        #self.prediction_q.put((self.id, state))
         #wait for prediction to come back
-        a = self.wait_q.get()
-        v = self.env.reward
-        return a, v
+        a = self.env.random_step()
+        return a
+
     
+    def run_episode(self):
+        self.env.reset()
+        self.history.add(self.env.state)
+        
+        random_start_steps = max(self.config.history_length, self.env.random_start_steps)
+        for _ in range(random_start_steps):
+            self.env.step(self.env.random_step())
+            self.history.add(self.env.state)
+
+        t = 0
+        while(not self.env.terminal):
+            #predict action, value
+            prev_state = self.env.state
+            action = self.predict(self.history.get())
+            self.env.step(action)
+            experience = Experience(prev_state, action, self.env.reward, 
+                                    self.env.state, self.env.terminal)
+            yield experience
+            t += 1
+            
     def run(self):
+        """
+        Takes in a game's experience frame-by-frame
+        """
+        time.sleep(np.random.rand())
         np.random.seed(np.int32(time.time() % 1000 * self.id))
 
-        while(self.exit_flag.value == 0):
-            total_reward = 0
+        # Put this in a while loop that checks a shared variable
+        # Will keep running episodes until the shared variable reports False
+        while(self.exit_flag == 0):
             for experience in self.run_episode():
-                total_reward += experience.reward
-                if(experience.terminal):
-                    self.training_q.put((self.id, total_reward))
-                    #total_reward = 0.
+                self.training_q.put(experience)
                 
                 
-class HillClimbTrainer(Trainer):
-    def run(self):
-        while(not self.exit_flag):
-            batch_size = 0
-            all_rewards = []
-            while(batch_size <= self.config.batch_size):
-                id, total_reward = self.get_training()
-                all_rewards.append(total_reward)
-                batch_size += 1
-            self.server.train_model(np.mean(all_rewards))
-            
-            
-class HillClimbPredictor(Predictor):
-    def run(self):
-        while(not self.exit_flag):
-            id, state = self.get_prediction()
-            result = self.server.predict_model(state)
-            self.server.agents[id].wait_q.put(result)
-                
-                
-class HillClimbServer(Server):
+    def simulate(self):
+        raise NotImplementedError()
+
+
+class DeepQServer(Server):
     def __init__(self, config):
-        super(HillClimbServer, self).__init__(config)
+        self.config = config
+        self.training_q = ReplayMemory(maxsize=config.memory_size)
+        self.prediction_q = mp.Queue(maxsize=config.max_q_size)
         
-    
+        self.agents = []
+        
+        self.is_alive = True
+        self.start()
+        
     def start(self):
-        self.trainer = HillClimbTrainer(self)
+        self.trainer = DeepQTrainer()
         self.trainer.start()
         
-        self.predictor = HillClimbPredictor(self)
+        self.predictor = DeepQPredictor()
         self.predictor.start()
         
-        self.model = HillClimbModel(self.config, None)
-        
+        self.model = DeepQModel(self.config)
         
     def add_agent(self, simulate=False):
-        self.agents.append(HillClimbAgent(len(self.agents), 
+        self.agents.append(DeepQAgent(len(self.agents), 
                                           self.prediction_q, self.training_q,
                                           self.config))
         if(simulate):
@@ -142,37 +223,20 @@ class HillClimbServer(Server):
         else:
             self.agents[-1].start()
         
-    def remove_agent(self):
-        self.agents[-1].exit_flag.value = True
-        self.agents[-1].terminate()
-        self.agents.pop()
-        print("Server: Agent stopped")
         
-    def train_model(self, scores):
-        self.model.fit(scores)
+
         
-    def predict_model(self, states):
-        return self.model.predict(states)
+
     
-    def stop(self):
-        self.trainer.exit_flag = True
-        self.trainer.join()
-        print("Server: Trainer terminated")
-        
-        self.predictor.exit_flag = True
-        self.predictor.join()
-        print("Server: Predictor terminated")
-        
-        for i in range(len(self.agents)):
-            self.remove_agent()
-        print("Server: Agents terminated")
-        self.is_alive = False
+
         
 
 if __name__ == "__main__":
-    server = HillClimbServer(Config())
-    server.add_agent()
-            
-            
+    replay = ReplayMemory(100)
+    pq = mp.Queue(maxsize=10000)
+    agent = DeepQAgent(0, pq, replay, Config())
+    agent.start()
+    
+    
 
         

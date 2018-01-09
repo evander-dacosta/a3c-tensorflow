@@ -7,6 +7,8 @@ Created on Fri Jan  5 16:25:27 2018
 """
 
 import inspect
+import numpy as np
+from scipy.misc import imresize
 
 def class_vars(obj):
     """
@@ -16,3 +18,7 @@ def class_vars(obj):
     """
     return{k:v for k,v in inspect.getmembers(obj) 
         if k.startswith('h_') and not callable(k)}
+    
+    
+def rgb2gray(image):
+    return np.dot(image[...,:3], [0.299, 0.587, 0.114])

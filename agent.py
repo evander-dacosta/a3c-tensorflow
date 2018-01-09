@@ -6,14 +6,15 @@ Created on Fri Jan  5 16:25:53 2018
 @author: evanderdcosta
 """
 
-import multiprocessing as mp
+import threading
 import numpy as np
 import time
+from queue import Queue
 from environment import SimpleEnvironment
 from experience import Experience
 
-class BaseAgent(mp.Process):
-    def __init__(self, id, prediction_q, training_q, config):
+class BaseAgent(threading.Thread):
+    def __init__(self, id, prediction_q, training_q, config, env):
         super(BaseAgent, self).__init__()
         self.config = config
         
@@ -21,16 +22,17 @@ class BaseAgent(mp.Process):
         self.prediction_q = prediction_q
         self.training_q = training_q
         
-        self.env = SimpleEnvironment(self.config)
+        self.env = env
         self.n_actions = self.env.action_size
         self.actions = np.arange(self.n_actions)
         
         self.discount, self.max_steps = config.discount, config.max_steps
         # One frame at a time
-        self.wait_q = mp.Queue(maxsize=1)
+        self.wait_q = Queue(maxsize=1)
         
         # exit flag
-        self.exit_flag = mp.Value('i', 0)
+        self.lock = threading.Lock()
+        self.exit_flag = 0
         
         
     def predict(self, state):
@@ -53,9 +55,9 @@ class BaseAgent(mp.Process):
             #predict action, value
             action, value = self.predict(self.env.state)
             self.env.step(action)
-            self.env.render()
             
-            experience = Experience(action, self.env.state, self.env.reward,
+            experience = Experience(self.env.state, action, self.env.reward,
+                                    None,
                                     self.env.terminal)
             experiences.append(experience)
             yield experience
@@ -70,8 +72,17 @@ class BaseAgent(mp.Process):
         
         # Put this in a while loop that checks a shared variable
         # Will keep running episodes until the shared variable reports False
-        while(self.exit_flag.value == 0):
+        while(self.exit_flag == 0):
             for experience in self.run_episode():
                 print(experience.state, experience.reward)
                 self.training_q.put(experience)
+                
+    def stop(self):
+        self.lock.acquire()
+        self.exit_flag = 1
+        self.lock.release()
+                
+                
+    def simulate(self):
+        raise NotImplementedError()
                 

@@ -134,9 +134,10 @@ class HillClimbServer(Server):
         
         
     def add_agent(self, simulate=False):
+        env = SimpleEnvironment(self.config)
         self.agents.append(HillClimbAgent(len(self.agents), 
                                           self.prediction_q, self.training_q,
-                                          self.config))
+                                          self.config, env))
         if(simulate):
             self.agents[-1].simulate()
         else:
